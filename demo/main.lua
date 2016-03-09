@@ -5,51 +5,40 @@ require('cunn')
 require('cudnn')
 require('stnn')
 require('stcunn')
+local THNN = require('nn.THNN')
 local DataLoader = require('dataloader')
 torch.setdefaulttensortype('torch.FloatTensor')
 
-function nn.Dropout:updateGradInput(input, gradOutput)
-   if self.inplace then
-      self.gradInput = gradOutput
-   else
-      self.gradInput:resizeAs(gradOutput):copy(gradOutput)
-   end
-   if self.train then
-      if self.p > 0 then
-         self.gradInput:cmul(self.noise) -- simply mask the gradients with the noise vector
-      end
-   end
-   return self.gradInput
-end
-
 
 local function backward(self, input, gradOutput, scale, gradInput, gradWeight, gradBias)
-   assert(input:dim() == 4, 'only mini-batch supported')
-   assert(gradOutput:dim() == 4, 'only mini-batch supported')
+   self:checkInputDim(input)
+   self:checkInputDim(gradOutput)
    assert(self.train == true, 'should be in training mode when self.train is true')
    assert(self.save_mean and self.save_std, 'must call :updateOutput() first')
+
+   input, gradOutput = makeContiguous(self, input, gradOutput)
 
    scale = scale or 1
    if gradInput then
       gradInput:resizeAs(gradOutput)
    end
 
-   input.nn.SpatialBatchNormalization_backward(
-   input,
-   gradOutput,
-   gradInput,
-   gradWeight,
-   gradBias,
-   self.weight,
-   self.save_mean,
-   self.save_std,
-   scale)
+   input.THNN.BatchNormalization_backward(
+      input:cdata(),
+      gradOutput:cdata(),
+      THNN.optionalTensor(gradInput),
+      THNN.optionalTensor(gradWeight),
+      THNN.optionalTensor(gradBias),
+      THNN.optionalTensor(self.weight),
+      self.save_mean:cdata(),
+      self.save_std:cdata(),
+      scale)
 
    return self.gradInput
 end
 
 
-function nn.SpatialBatchNormalization:updateGradInput(input, gradOutput)
+function nn.BatchNormalization:updateGradInput(input, gradOutput)
    if self.train then
       return backward(self, input, gradOutput, 1, self.gradInput)
    else
@@ -57,18 +46,18 @@ function nn.SpatialBatchNormalization:updateGradInput(input, gradOutput)
       self.zeros:resizeAs(self.running_mean):zero()
       self.gradInput:resizeAs(gradOutput)
 
-      input.nn.SpatialBatchNormalization_updateOutput(
-         gradOutput,        -- input
-         self.gradInput,    -- output
-         self.weight,       -- weight
-         self.zeros,        -- bias
-         false,             -- train
-         self.eps,          -- eps
-         self.momentum,     -- momentum
-         self.zeros,        -- running mean
-         self.running_var,  -- running var
-         nil,               -- save mean
-         nil)               -- save std
+      input.THNN.BatchNormalization_updateOutput(
+         gradOutput:cdata(),
+         self.gradInput:cdata(),
+         THNN.optionalTensor(self.weight),
+         THNN.NULL,
+         self.zeros:cdata(),
+         self.running_var:cdata(),
+         THNN.NULL,
+         THNN.NULL,
+         false,
+         self.momentum,
+         self.eps)
 
       return self.gradInput
    end
